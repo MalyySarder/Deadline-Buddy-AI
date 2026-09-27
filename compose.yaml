@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file: backend/.env
+    environment:
+      DATABASE_PATH: /data/deadline_buddy.sqlite3
+      TZ: Asia/Novosibirsk
+    volumes:
+      - buddy-data:/data
+    restart: unless-stopped
+volumes:
+  buddy-data:
