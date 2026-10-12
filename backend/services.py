@@ -36,6 +36,7 @@ MESSAGES = {
     'LLM_TIMEOUT': 'Разбор занял слишком много времени. Попробуйте ещё раз.',
     'LLM_BUSY': 'Сервис ИИ перегружен. Подождите минуту.',
     'LLM_BAD_RESPONSE': 'Не удалось разобрать задание. Попробуйте ещё раз.',
+    'LLM_INCOMPLETE': 'ИИ обрезал ответ до завершения плана. Попробуйте разобрать задание ещё раз.',
     'SESSION_NOT_FOUND': 'Сессия истекла или плана пока нет. Пришлите задание заново.',
     'STEP_NOT_FOUND': 'Шаг не найден. Откройте план командой /plan.',
     'USER_BUSY': 'Уже разбираю ваше задание. Дождитесь результата.',
@@ -139,6 +140,11 @@ def llm_client(timeout):
     return httpx.AsyncClient(**options)
 
 
+def model_options():
+    options = CFG.get('chat_template_kwargs')
+    return {'chat_template_kwargs': options} if isinstance(options, dict) else {}
+
+
 async def probe_model():
     """Small real generation request; never returns provider bodies or credentials."""
     key, base, model = (os.getenv(k, '').strip() for k in ('LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL'))
@@ -151,7 +157,7 @@ async def probe_model():
                 r = await client.post(base.rstrip('/') + '/chat/completions',
                     headers={'Authorization': 'Bearer ' + key},
                     json={'model': model, 'messages': [{'role': 'user', 'content': 'Reply with exactly: API works'}],
-                          'stream': False, 'max_tokens': 256})
+                          'stream': False, 'max_tokens': 256, **model_options()})
                 if r.status_code in (401, 403):
                     return 'ИИ недоступен: ключ отклонён или недостаточно прав.'
                 if r.status_code == 429:
@@ -177,7 +183,7 @@ async def analyze_model(text):
         raise ServiceError('LLM_NOT_CONFIGURED')
     body = {'model': model, 'messages': [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': text}],
             'temperature': CFG['temperature'], 'max_tokens': CFG['max_tokens'], 'stream': False,
-            'response_format': {'type': 'json_object'}}
+            'response_format': {'type': 'json_object'}, **model_options()}
     async with llm_client(CFG['llm_timeout']) as client:
         for attempt in range(2):
             try:
@@ -186,7 +192,10 @@ async def analyze_model(text):
                     raise ServiceError('LLM_BUSY')
                 if r.status_code != 200:
                     raise ServiceError('LLM_BAD_RESPONSE')
-                content = r.json()['choices'][0]['message']['content']
+                choice = r.json()['choices'][0]
+                if choice.get('finish_reason') == 'length':
+                    raise ServiceError('LLM_INCOMPLETE')
+                content = choice['message']['content']
                 return validate_model(json.loads(content))
             except httpx.TimeoutException:
                 raise ServiceError('LLM_TIMEOUT') from None

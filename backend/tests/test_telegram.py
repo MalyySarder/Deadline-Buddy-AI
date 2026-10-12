@@ -282,3 +282,24 @@ def test_separate_ai_transport(monkeypatch):
     s.llm_client(25)
     assert 'transport' not in client.call_args.kwargs
     assert client.call_args.kwargs['trust_env'] is False
+
+def test_large_model_request_and_truncation(monkeypatch):
+    from check_ai import long_sample
+    monkeypatch.setenv('LLM_API_KEY','test-secret')
+    monkeypatch.setenv('LLM_BASE_URL','https://example.test/api')
+    monkeypatch.setenv('LLM_MODEL','test-model')
+    source=s.normalize(long_sample(48))
+    calls=[]
+    def handle(request):
+        body=json.loads(request.content)
+        calls.append(body)
+        assert body['chat_template_kwargs']=={'enable_thinking':False}
+        assert body['max_tokens']==5000
+        assert body['messages'][1]['content']==source
+        return httpx.Response(200,json={'choices':[{'finish_reason':'length','message':{'content':''}}]})
+    original=httpx.AsyncClient
+    monkeypatch.setattr(s.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handle),**kw))
+    with pytest.raises(s.ServiceError) as e:asyncio.run(s.analyze_model(source))
+    assert e.value.code=='LLM_INCOMPLETE' and len(calls)==1
+    monkeypatch.delitem(s.CFG,'chat_template_kwargs')
+    assert s.model_options()=={}

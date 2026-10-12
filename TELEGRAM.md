@@ -81,3 +81,7 @@ Get-NetIPAddress -AddressFamily IPv4 | Select-Object InterfaceAlias,IPAddress
 После смены сети, перехода с Ethernet на Wi-Fi или изменения адреса DHCP обновите `LLM_LOCAL_ADDRESS` и перезапустите бота. При работе без VPN обе настройки можно оставить пустыми. Для Docker используйте адрес, доступный внутри контейнера: адрес Windows-хоста для привязки не подходит.
 
 Не выключайте VPN-клиент, пока Telegram использует его локальный прокси. После настройки проверьте `/ai` и полноценное задание.
+
+## Проверка больших заданий
+
+Команда `.\.venv\Scripts\python.exe backend/check_ai.py --long` проверяет короткое условие и два длинных (примерно 10 и 20 тысяч символов). В config.yaml для Qwen отключены внутренние рассуждения (`chat_template_kwargs.enable_thinking: false`), лимит ответа — 5000 токенов. Это предотвращает расход всего ответа на reasoning без готового JSON. При смене провайдера проверьте поддержку параметра; для несовместимого API удалите блок `chat_template_kwargs`. [Документация Qwen](https://qwen.readthedocs.io/en/latest/getting_started/quickstart.html).

@@ -1,5 +1,9 @@
 temperature: 0.2
-max_tokens: 2200
+max_tokens: 5000
+# Qwen via DeepCode: spend tokens on the plan, not hidden reasoning.
+# Remove this option for providers that do not support chat_template_kwargs.
+chat_template_kwargs:
+  enable_thinking: false
 llm_timeout: 25
 analysis_timeout: 29
 max_concurrent: 5
