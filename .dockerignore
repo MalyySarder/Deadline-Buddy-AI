@@ -7,3 +7,6 @@
 **/.env
 **/*.sqlite3*
 docs/screenshots
+legacy
+.runtime
+**/*.log

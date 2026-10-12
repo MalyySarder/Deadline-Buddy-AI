@@ -1,14 +1,11 @@
 services:
-  app:
+  bot:
     build: .
-    ports:
-      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
     env_file: backend/.env
     environment:
-      DATABASE_PATH: /data/deadline_buddy.sqlite3
-      TZ: Asia/Novosibirsk
+      BOT_DATABASE_PATH: /data/telegram.sqlite3
     volumes:
-      - buddy-data:/data
-    restart: unless-stopped
+      - bot-data:/data
 volumes:
-  buddy-data:
+  bot-data:
