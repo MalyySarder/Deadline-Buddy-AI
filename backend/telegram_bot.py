@@ -7,6 +7,7 @@ import os
 import time
 from contextlib import suppress
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from services import Analyzer, CFG, ServiceError, Store, pdf_text, split_deadline, probe_model
@@ -297,7 +298,8 @@ async def run(check=False):
     if not token:
         print('BOT_TOKEN is missing in backend/.env',flush=True)
         return 1
-    async with Bot(token) as bot:
+    proxy = os.getenv('TELEGRAM_PROXY', '').strip() or None
+    async with Bot(token, session=AiohttpSession(proxy=proxy)) as bot:
         me=await bot.get_me()
         if me.username.lower()!=expected.lower():
             print('Bot identity mismatch',flush=True)

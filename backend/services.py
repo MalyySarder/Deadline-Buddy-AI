@@ -130,6 +130,15 @@ def validate_model(data):
     return {k: data[k] for k in ('goal', 'requirements', 'constraints', 'steps')}
 
 
+def llm_client(timeout):
+    """Keep AI off environment proxies; optionally bind its physical adapter."""
+    options = {'timeout': timeout, 'follow_redirects': False, 'trust_env': False}
+    address = os.getenv('LLM_LOCAL_ADDRESS', '').strip()
+    if address:
+        options['transport'] = httpx.AsyncHTTPTransport(local_address=address, trust_env=False)
+    return httpx.AsyncClient(**options)
+
+
 async def probe_model():
     """Small real generation request; never returns provider bodies or credentials."""
     key, base, model = (os.getenv(k, '').strip() for k in ('LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL'))
@@ -138,7 +147,7 @@ async def probe_model():
     started = time.monotonic()
     try:
         async with asyncio.timeout(20):
-            async with httpx.AsyncClient(timeout=18, follow_redirects=False) as client:
+            async with llm_client(18) as client:
                 r = await client.post(base.rstrip('/') + '/chat/completions',
                     headers={'Authorization': 'Bearer ' + key},
                     json={'model': model, 'messages': [{'role': 'user', 'content': 'Reply with exactly: API works'}],
@@ -169,7 +178,7 @@ async def analyze_model(text):
     body = {'model': model, 'messages': [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': text}],
             'temperature': CFG['temperature'], 'max_tokens': CFG['max_tokens'], 'stream': False,
             'response_format': {'type': 'json_object'}}
-    async with httpx.AsyncClient(timeout=CFG['llm_timeout'], follow_redirects=False) as client:
+    async with llm_client(CFG['llm_timeout']) as client:
         for attempt in range(2):
             try:
                 r = await client.post(base.rstrip('/') + '/chat/completions', headers={'Authorization': 'Bearer ' + key}, json=body)

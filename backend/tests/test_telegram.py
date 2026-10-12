@@ -264,3 +264,21 @@ def test_analysis_error_replaces_waiting_message(store):
         assert 'слишком много времени' in status.edit_text.call_args.args[0]
         assert status.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0].callback_data=='ai'
     asyncio.run(run())
+
+
+def test_separate_ai_transport(monkeypatch):
+    from unittest.mock import Mock
+    transport=Mock()
+    client=Mock()
+    monkeypatch.setattr(s.httpx,'AsyncHTTPTransport',transport)
+    monkeypatch.setattr(s.httpx,'AsyncClient',client)
+    monkeypatch.setenv('HTTPS_PROXY','http://vpn.example:8080')
+    monkeypatch.setenv('LLM_LOCAL_ADDRESS','192.0.2.10')
+    s.llm_client(18)
+    transport.assert_called_once_with(local_address='192.0.2.10',trust_env=False)
+    assert client.call_args.kwargs['trust_env'] is False
+    assert client.call_args.kwargs['transport'] is transport.return_value
+    monkeypatch.delenv('LLM_LOCAL_ADDRESS')
+    s.llm_client(25)
+    assert 'transport' not in client.call_args.kwargs
+    assert client.call_args.kwargs['trust_env'] is False
