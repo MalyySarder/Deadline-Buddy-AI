@@ -16,6 +16,8 @@ TEXT = 'Подготовить учебный проект по анализу �
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, 'DB_PATH', str(tmp_path / 'test.sqlite3'))
     monkeypatch.setenv('DEMO_MODE', 'true')
+    monkeypatch.setenv('LLM_BASE_URL', 'https://llm.example.test/v1')
+    monkeypatch.setenv('LLM_MODEL', 'test-model')
     with TestClient(main.app) as c:
         yield c
 
