@@ -173,7 +173,7 @@ def test_text_wins_over_file(store):
 def test_long_render(store):
     p=store.replace(1,{**VALID,'goal':'😀'*1000,'steps':['шаг'*300]*12})
     assert all(len(t.encode('utf-16-le'))//2<=4096 for t in plan_texts(p))
-    assert len(keyboard(p).inline_keyboard)==15
+    assert len(keyboard(p).inline_keyboard)==16
     assert ''.join(chunks('😀'*6000))=='😀'*6000
 
 
@@ -206,4 +206,61 @@ def test_draft_expiry_and_group_ignored(store):
         m=message('/start');m.chat.type='group'
         await c.message(m)
         m.answer.assert_not_called()
+    asyncio.run(run())
+
+@pytest.mark.parametrize('mode,expected',[
+    ('ok','ИИ ответил'),('timeout','не ответил'),('network','Нет соединения'),
+    ('auth','ключ отклонён'),('busy','превышен лимит'),('server','HTTP 503'),
+    ('bad','некорректные данные'),('empty','пустой ответ')])
+def test_ai_probe(monkeypatch,mode,expected):
+    monkeypatch.setenv('LLM_API_KEY','test-secret')
+    monkeypatch.setenv('LLM_BASE_URL','https://example.test/api')
+    monkeypatch.setenv('LLM_MODEL','test-model')
+    def handle(request):
+        body=json.loads(request.content)
+        assert body['messages']==[{'role':'user','content':'Reply with exactly: API works'}]
+        assert body['max_tokens']==256 and not body['stream']
+        if mode=='timeout':raise httpx.ReadTimeout('test-secret')
+        if mode=='network':raise httpx.ConnectError('test-secret')
+        if mode in ('auth','busy','server'):return httpx.Response({'auth':401,'busy':429,'server':503}[mode])
+        if mode=='bad':return httpx.Response(200,text='<html>test-secret</html>')
+        return httpx.Response(200,json={'choices':[{'message':{'content':'' if mode=='empty' else 'API works'}}]})
+    original=httpx.AsyncClient
+    monkeypatch.setattr(s.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handle),**kw))
+    result=asyncio.run(s.probe_model())
+    assert expected in result and 'test-secret' not in result
+
+
+def test_probe_during_analysis_and_cooldown(store,monkeypatch):
+    import telegram_bot
+    async def run():
+        probe=AsyncMock(return_value='ИИ ответил')
+        monkeypatch.setattr(telegram_bot,'probe_model',probe)
+        c=Conversation(store)
+        c.analyzer.active.add(1)
+        c.drafts[1]=('draft',time.time())
+        c.waiting[1]=time.time()
+        m=message('/ai');await c.message(m)
+        assert probe.await_count==1 and 1 in c.waiting and c.drafts[1][0]=='draft'
+        cb=SimpleNamespace(message=m,from_user=SimpleNamespace(id=1),data='ai',answer=AsyncMock())
+        await c.callback(cb)
+        assert probe.await_count==1
+        c.probe_after=0
+        await c.callback(cb)
+        assert probe.await_count==2
+        c.probe_active=True
+        await c.message(m)
+        assert probe.await_count==2
+    asyncio.run(run())
+
+
+def test_analysis_error_replaces_waiting_message(store):
+    async def run():
+        model=AsyncMock(side_effect=s.ServiceError('LLM_TIMEOUT'))
+        c=Conversation(store,s.Analyzer(store,model))
+        m=message(TEXT)
+        status=m.answer.return_value
+        await c.message(m)
+        assert 'слишком много времени' in status.edit_text.call_args.args[0]
+        assert status.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0].callback_data=='ai'
     asyncio.run(run())

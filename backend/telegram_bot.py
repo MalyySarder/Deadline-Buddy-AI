@@ -9,7 +9,7 @@ from contextlib import suppress
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
-from services import Analyzer, CFG, ServiceError, Store, pdf_text, split_deadline
+from services import Analyzer, CFG, ServiceError, Store, pdf_text, split_deadline, probe_model
 
 START = ('Привет! Я Deadline Buddy — помогу понять учебное задание и составить план.\n\n'
          'Пришлите условие текстом (200–20 000 символов) или PDF до 5 МБ с текстовым слоем. '
@@ -32,10 +32,15 @@ PRIVACY = ('В SQLite сохраняются ваш Telegram ID, план, от�
            'Сообщения остаются в вашем чате Telegram, пока вы сами их не удалите.')
 
 
+def ai_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='Проверить ИИ', callback_data='ai')]])
+
+
 def navigation():
     return [[InlineKeyboardButton(text='Сегодня', callback_data='today'), InlineKeyboardButton(text='Весь план', callback_data='plan')],
             [InlineKeyboardButton(text='Указать дату сдачи', callback_data='deadline')],
-            [InlineKeyboardButton(text='Разобрать заново', callback_data='new')]]
+            [InlineKeyboardButton(text='Разобрать заново', callback_data='new')],
+            [InlineKeyboardButton(text='Проверить ИИ', callback_data='ai')]]
 
 
 def keyboard(plan):
@@ -103,6 +108,24 @@ class Conversation:
         self.analyzer = analyzer or Analyzer(store)
         self.waiting = {}
         self.drafts = {}
+        self.probe_active = False
+        self.probe_after = 0
+
+    async def check_ai(self, message):
+        if self.probe_active:
+            await message.answer('Проверка ИИ уже идёт. Дождитесь результата (до 20 секунд).')
+            return
+        if time.monotonic() < self.probe_after:
+            await message.answer('Повторить проверку можно через несколько секунд.', reply_markup=ai_keyboard())
+            return
+        self.probe_active = True
+        try:
+            await message.answer('Проверяю ИИ коротким запросом… До 20 секунд.')
+            result = await probe_model()
+            await message.answer(result, reply_markup=ai_keyboard())
+        finally:
+            self.probe_active = False
+            self.probe_after = time.monotonic() + 10
 
     def cleanup(self):
         cutoff = time.time()-900
@@ -138,8 +161,17 @@ class Conversation:
         uid = message.from_user.id
         if uid in self.analyzer.active:
             raise ServiceError('USER_BUSY')
-        await message.answer('Разбираем задание…')
-        p = await self.analyzer.analyze(uid, prepare or (lambda: self.prepare(message)))
+        status = await message.answer('Разбираем задание…', reply_markup=ai_keyboard())
+        try:
+            p = await self.analyzer.analyze(uid, prepare or (lambda: self.prepare(message)))
+        except ServiceError as exc:
+            try:
+                await status.edit_text(str(exc), reply_markup=ai_keyboard())
+            except TelegramAPIError:
+                await message.answer(str(exc), reply_markup=ai_keyboard())
+            return
+        with suppress(TelegramAPIError):
+            await status.edit_text('Разбор готов.')
         self.waiting.pop(uid, None)
         await self.show(message, p)
 
@@ -153,7 +185,9 @@ class Conversation:
         command = text.split(maxsplit=1)[0].split('@')[0] if text.startswith('/') else ''
         try:
             if command in ('/start','/help','/privacy'):
-                await message.answer({'/start':START, '/help':HELP, '/privacy':PRIVACY}[command])
+                await message.answer({'/start':START, '/help':HELP, '/privacy':PRIVACY}[command], reply_markup=ai_keyboard())
+            elif command == '/ai':
+                await self.check_ai(message)
             elif command in ('/plan','/today'):
                 await self.show(message,self.store.plan(uid), command=='/today')
             elif uid in self.analyzer.active:
@@ -223,7 +257,9 @@ class Conversation:
         message = callback.message
         action = callback.data or ''
         try:
-            if action in ('plan','today'):
+            if action == 'ai':
+                await self.check_ai(message)
+            elif action in ('plan','today'):
                 await self.show(message,self.store.plan(uid),action=='today')
             elif uid in self.analyzer.active:
                 raise ServiceError('USER_BUSY')
@@ -290,7 +326,7 @@ async def run(check=False):
         await bot.set_my_commands([BotCommand(command=c,description=d) for c,d in [
             ('start','Как начать'),('plan','Весь план и чек-лист'),('today','Задачи на сегодня'),
             ('deadline','Указать дату сдачи'),('new','Собрать длинное условие'),('analyze','Разобрать собранный текст'),
-            ('cancel','Отменить ввод'),('help','Помощь'),('privacy','Хранение данных'),('delete','Удалить мой план')]])
+            ('cancel','Отменить ввод'),('help','Помощь'),('ai','Проверить связь с ИИ'),('privacy','Хранение данных'),('delete','Удалить мой план')]])
         async def cleanup():
             while True:
                 conversation.cleanup()

@@ -130,6 +130,38 @@ def validate_model(data):
     return {k: data[k] for k in ('goal', 'requirements', 'constraints', 'steps')}
 
 
+async def probe_model():
+    """Small real generation request; never returns provider bodies or credentials."""
+    key, base, model = (os.getenv(k, '').strip() for k in ('LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL'))
+    if not all((key, base, model)):
+        return 'Не настроено подключение к ИИ.'
+    started = time.monotonic()
+    try:
+        async with asyncio.timeout(20):
+            async with httpx.AsyncClient(timeout=18, follow_redirects=False) as client:
+                r = await client.post(base.rstrip('/') + '/chat/completions',
+                    headers={'Authorization': 'Bearer ' + key},
+                    json={'model': model, 'messages': [{'role': 'user', 'content': 'Reply with exactly: API works'}],
+                          'stream': False, 'max_tokens': 256})
+                if r.status_code in (401, 403):
+                    return 'ИИ недоступен: ключ отклонён или недостаточно прав.'
+                if r.status_code == 429:
+                    return 'ИИ перегружен: превышен лимит запросов (429).'
+                if r.status_code != 200:
+                    return f'Сервис ИИ вернул HTTP {r.status_code}.'
+                content = r.json()['choices'][0]['message']['content']
+                if not isinstance(content, str) or not content.strip():
+                    return 'Сервис доступен, но модель вернула пустой ответ.'
+                return (f'✅ ИИ ответил за {time.monotonic()-started:.1f} с.\n'
+                        'Короткий запрос прошёл. Полный разбор может занять больше времени.')
+    except (TimeoutError, httpx.TimeoutException):
+        return '⏱ ИИ не ответил за время проверки (до 20 с). Бот работает, проверьте подключение к сервису ИИ.'
+    except httpx.RequestError:
+        return 'Нет соединения с сервисом ИИ. Сам Telegram-бот работает.'
+    except (ValueError, KeyError, IndexError, TypeError):
+        return 'Сервис доступен, но вместо ответа модели пришли некорректные данные.'
+
+
 async def analyze_model(text):
     key, base, model = (os.getenv(k, '').strip() for k in ('LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL'))
     if not all((key, base, model)):
